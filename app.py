@@ -1,438 +1,149 @@
 import streamlit as st
+import PyPDF2
+import re
+import time
 import json
 import os
-import random
 
-# ── Config ──────────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="StudyQuiz",
-    page_icon="📚",
-    layout="centered",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="StudyQuiz PRO", layout="centered")
 
-QUESTOES_FILE = "questoes.json"
+st.title("📄🧠 StudyQuiz PRO")
 
-# ── CSS ─────────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap');
+# -----------------------------
+# FUNÇÕES
+# -----------------------------
 
-html, body, [class*="css"] {
-    font-family: 'Syne', sans-serif;
-}
+def extrair_texto(pdf_file):
+    reader = PyPDF2.PdfReader(pdf_file)
+    texto = ""
+    for page in reader.pages:
+        texto += page.extract_text() + "\n"
+    return texto
 
-/* fundo escuro */
-.stApp {
-    background: #0d0f14;
-    color: #e8e8f0;
-}
+def transformar_em_questoes(texto):
+    padrao = r'(\d+\).*?(?=\n\d+\)|$)'
+    blocos = re.findall(padrao, texto, re.DOTALL)
 
-/* sidebar */
-[data-testid="stSidebar"] {
-    background: #13161e;
-    border-right: 1px solid #1f2333;
-}
+    questoes = []
 
-/* título principal */
-h1 { font-family: 'Syne', sans-serif; font-weight: 800; color: #7ee8a2; letter-spacing: -1px; }
-h2, h3 { font-family: 'Syne', sans-serif; font-weight: 600; color: #c8d6ff; }
+    for bloco in blocos:
+        partes = re.split(r'[A-D]\)', bloco)
+        alternativas = re.findall(r'([A-D]\)\s.*)', bloco)
 
-/* card de questão */
-.card {
-    background: #161922;
-    border: 1px solid #252a3a;
-    border-radius: 12px;
-    padding: 28px 32px;
-    margin: 16px 0;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.4);
-}
+        if len(alternativas) >= 2:
+            pergunta = partes[0].strip()
+            opcoes = [alt[3:].strip() for alt in alternativas]
 
-.enunciado {
-    font-size: 1.1rem;
-    line-height: 1.7;
-    color: #dde4ff;
-    margin-bottom: 20px;
-    font-family: 'Syne', sans-serif;
-}
+            questoes.append({
+                "pergunta": pergunta,
+                "opcoes": opcoes,
+                "dificuldade": detectar_dificuldade(pergunta)
+            })
 
-/* badge de matéria */
-.badge {
-    display: inline-block;
-    background: #1a2540;
-    color: #7eb8f7;
-    border: 1px solid #2a3d6b;
-    border-radius: 20px;
-    padding: 3px 14px;
-    font-size: 0.78rem;
-    font-family: 'Space Mono', monospace;
-    letter-spacing: 0.04em;
-    margin-bottom: 14px;
-}
+    return questoes
 
-/* resultado correto/errado */
-.resultado-certo {
-    background: #0d2b1a;
-    border: 1px solid #1e7a45;
-    border-radius: 10px;
-    padding: 14px 20px;
-    color: #5ddb8a;
-    font-weight: 600;
-    margin-top: 12px;
-}
-.resultado-errado {
-    background: #2b0d0d;
-    border: 1px solid #7a1e1e;
-    border-radius: 10px;
-    padding: 14px 20px;
-    color: #e06060;
-    font-weight: 600;
-    margin-top: 12px;
-}
+def detectar_dificuldade(pergunta):
+    tamanho = len(pergunta)
 
-/* placar */
-.placar {
-    background: #13161e;
-    border: 1px solid #1f2333;
-    border-radius: 12px;
-    padding: 20px 28px;
-    text-align: center;
-    margin: 20px 0;
-}
+    if tamanho < 80:
+        return "Fácil"
+    elif tamanho < 150:
+        return "Médio"
+    else:
+        return "Difícil"
 
-.placar-num {
-    font-family: 'Space Mono', monospace;
-    font-size: 2.2rem;
-    color: #7ee8a2;
-    font-weight: 700;
-}
+def salvar_progresso(respostas, acertos, tempo):
+    dados = {
+        "respostas": respostas,
+        "acertos": acertos,
+        "tempo": tempo
+    }
 
-/* inputs */
-.stTextInput > div > div > input,
-.stTextArea > div > div > textarea,
-.stSelectbox > div > div {
-    background: #1a1d27 !important;
-    border: 1px solid #2a2f45 !important;
-    color: #e8e8f0 !important;
-    border-radius: 8px !important;
-}
+    with open("progresso.json", "w") as f:
+        json.dump(dados, f)
 
-/* botões */
-.stButton > button {
-    background: #1e3a5f;
-    color: #7eb8f7;
-    border: 1px solid #2a5490;
-    border-radius: 8px;
-    font-family: 'Space Mono', monospace;
-    font-size: 0.85rem;
-    padding: 10px 24px;
-    transition: all 0.2s;
-}
-.stButton > button:hover {
-    background: #2a4f80;
-    border-color: #4a7fbe;
-    color: #aed4ff;
-}
-
-/* radio buttons */
-.stRadio > div {
-    gap: 10px;
-}
-.stRadio label {
-    background: #161922;
-    border: 1px solid #252a3a;
-    border-radius: 8px;
-    padding: 10px 16px;
-    cursor: pointer;
-    transition: border-color 0.2s;
-    color: #c8d6ff !important;
-}
-.stRadio label:hover {
-    border-color: #4a6fa5;
-}
-
-/* divider */
-hr { border-color: #1f2333; }
-
-/* progress bar */
-.stProgress > div > div > div {
-    background: #7ee8a2;
-}
-
-/* metric */
-[data-testid="metric-container"] {
-    background: #161922;
-    border: 1px solid #252a3a;
-    border-radius: 10px;
-    padding: 16px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# ── Funções de dados ─────────────────────────────────────────────────────────
-def carregar_questoes():
-    if os.path.exists(QUESTOES_FILE):
-        with open(QUESTOES_FILE, "r", encoding="utf-8") as f:
+def carregar_progresso():
+    if os.path.exists("progresso.json"):
+        with open("progresso.json", "r") as f:
             return json.load(f)
-    return {}
+    return None
 
-def salvar_questoes(dados):
-    with open(QUESTOES_FILE, "w", encoding="utf-8") as f:
-        json.dump(dados, f, ensure_ascii=False, indent=2)
+# -----------------------------
+# UPLOAD PDF
+# -----------------------------
 
-def listar_materias(dados):
-    return sorted(dados.keys())
+pdf = st.file_uploader("📄 Envie seu PDF de questões", type="pdf")
 
-# ── Init session state ───────────────────────────────────────────────────────
-if "dados" not in st.session_state:
-    st.session_state.dados = carregar_questoes()
-if "idx" not in st.session_state:
-    st.session_state.idx = 0
-if "acertos" not in st.session_state:
-    st.session_state.acertos = 0
-if "erros" not in st.session_state:
-    st.session_state.erros = 0
-if "respondida" not in st.session_state:
-    st.session_state.respondida = False
-if "escolha" not in st.session_state:
-    st.session_state.escolha = None
-if "questoes_sessao" not in st.session_state:
-    st.session_state.questoes_sessao = []
-if "modo" not in st.session_state:
-    st.session_state.modo = "estudar"
+if pdf:
+    texto = extrair_texto(pdf)
+    questoes = transformar_em_questoes(texto)
 
-dados = st.session_state.dados
-
-# ── Sidebar ──────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("# 📚 StudyQuiz")
-    st.markdown("---")
-    modo = st.radio(
-        "Navegação",
-        ["📝 Estudar", "➕ Adicionar Questão", "📋 Ver Banco de Questões"],
-        key="nav"
-    )
-    st.markdown("---")
-    materias = listar_materias(dados)
-    total = sum(len(qs) for qs in dados.values())
-    st.markdown(f"**Matérias cadastradas:** {len(materias)}")
-    st.markdown(f"**Total de questões:** {total}")
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MODO: ESTUDAR
-# ═══════════════════════════════════════════════════════════════════════════
-if modo == "📝 Estudar":
-    st.markdown("## 📝 Modo Estudo")
-
-    if not dados:
-        st.info("Nenhuma questão cadastrada ainda. Vá em **➕ Adicionar Questão** para começar!")
+    if not questoes:
+        st.error("Não consegui identificar questões 😢")
     else:
-        materias = listar_materias(dados)
-        materia_sel = st.selectbox("Selecione a matéria", ["🔀 Todas as matérias"] + materias)
+        st.success(f"{len(questoes)} questões encontradas!")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            embaralhar = st.checkbox("Embaralhar questões", value=True)
-        with col2:
-            limite = st.number_input("Qtd. de questões", min_value=1, max_value=100, value=10)
+        # iniciar tempo
+        if "start_time" not in st.session_state:
+            st.session_state.start_time = time.time()
 
-        if st.button("▶  Iniciar Sessão de Estudo"):
-            if materia_sel == "🔀 Todas as matérias":
-                pool = []
-                for qs in dados.values():
-                    pool.extend(qs)
-            else:
-                pool = dados.get(materia_sel, [])
+        respostas_usuario = []
 
-            if not pool:
-                st.warning("Nenhuma questão nessa matéria.")
-            else:
-                if embaralhar:
-                    random.shuffle(pool)
-                st.session_state.questoes_sessao = pool[:limite]
-                st.session_state.idx = 0
-                st.session_state.acertos = 0
-                st.session_state.erros = 0
-                st.session_state.respondida = False
-                st.session_state.escolha = None
-                st.session_state.modo = "quiz"
-                st.rerun()
+        # -----------------------------
+        # QUIZ
+        # -----------------------------
+        for i, q in enumerate(questoes):
+            st.markdown(f"### Questão {i+1}")
+            st.caption(f"Dificuldade: {q['dificuldade']}")
 
-# ═══════════════════════════════════════════════════════════════════════════
-# MODO: QUIZ ATIVO
-# ═══════════════════════════════════════════════════════════════════════════
-elif st.session_state.modo == "quiz" and modo == "📝 Estudar":
-    qs = st.session_state.questoes_sessao
-    idx = st.session_state.idx
+            resposta = st.radio(
+                q["pergunta"],
+                q["opcoes"],
+                key=f"q_{i}"
+            )
 
-    if idx >= len(qs):
-        # Resultado final
-        st.markdown("## 🏁 Sessão Concluída!")
-        total_respondidas = st.session_state.acertos + st.session_state.erros
-        pct = int((st.session_state.acertos / total_respondidas) * 100) if total_respondidas else 0
+            respostas_usuario.append(resposta)
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("✅ Acertos", st.session_state.acertos)
-        col2.metric("❌ Erros", st.session_state.erros)
-        col3.metric("🎯 Aproveitamento", f"{pct}%")
+        # -----------------------------
+        # FINALIZAR
+        # -----------------------------
+        if st.button("🚀 Finalizar"):
+            tempo_total = time.time() - st.session_state.start_time
 
-        st.progress(pct / 100)
+            acertos = 0
+            for i, q in enumerate(questoes):
+                # aqui ainda não temos gabarito automático
+                # então só conta se existir "correta"
+                if "correta" in q and respostas_usuario[i] == q["correta"]:
+                    acertos += 1
 
-        if pct >= 70:
-            st.markdown('<div class="resultado-certo">🎉 Ótimo desempenho! Continue assim.</div>', unsafe_allow_html=True)
-        elif pct >= 50:
-            st.markdown('<div class="resultado-errado">📖 Resultado razoável. Revise os temas com mais atenção.</div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="resultado-errado">💪 Precisa estudar mais. Não desista!</div>', unsafe_allow_html=True)
+            total = len(questoes)
+            porcentagem = (acertos / total) * 100 if total > 0 else 0
 
-        if st.button("🔄 Nova Sessão"):
-            st.session_state.modo = "estudar"
-            st.rerun()
-    else:
-        questao = qs[idx]
-        progresso = idx / len(qs)
+            salvar_progresso(respostas_usuario, acertos, tempo_total)
 
-        st.markdown(f"**Questão {idx+1} de {len(qs)}**")
-        st.progress(progresso)
+            st.success("💾 Progresso salvo!")
 
-        st.markdown(f'<div class="badge">{questao.get("materia", "Geral")}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="card"><div class="enunciado">{questao["enunciado"]}</div></div>', unsafe_allow_html=True)
+            # -----------------------------
+            # DASHBOARD
+            # -----------------------------
+            st.subheader("📊 Resultado")
 
-        alternativas = {
-            "A": questao["alternativa_a"],
-            "B": questao["alternativa_b"],
-            "C": questao["alternativa_c"],
-            "D": questao["alternativa_d"],
-        }
+            st.write(f"Acertos: {acertos}/{total}")
+            st.write(f"Porcentagem: {porcentagem:.1f}%")
+            st.write(f"Tempo gasto: {int(tempo_total)} segundos")
 
-        opcoes = [f"{k}) {v}" for k, v in alternativas.items()]
+# -----------------------------
+# CARREGAR PROGRESSO
+# -----------------------------
 
-        if not st.session_state.respondida:
-            escolha = st.radio("Escolha sua resposta:", opcoes, key=f"radio_{idx}")
-            letra = escolha[0]
+st.divider()
+st.subheader("📂 Progresso anterior")
 
-            if st.button("✔  Confirmar Resposta"):
-                st.session_state.escolha = letra
-                st.session_state.respondida = True
-                if letra == questao["gabarito"]:
-                    st.session_state.acertos += 1
-                else:
-                    st.session_state.erros += 1
-                st.rerun()
-        else:
-            letra = st.session_state.escolha
-            gabarito = questao["gabarito"]
+dados = carregar_progresso()
 
-            # mostra as alternativas sem interação
-            for k, v in alternativas.items():
-                st.write(f"**{k})** {v}")
-
-            if letra == gabarito:
-                st.markdown(f'<div class="resultado-certo">✅ Correto! A resposta é <b>{gabarito}</b>.</div>', unsafe_allow_html=True)
-            else:
-                st.markdown(f'<div class="resultado-errado">❌ Errado! Você escolheu <b>{letra}</b>. A resposta certa é <b>{gabarito}</b>.</div>', unsafe_allow_html=True)
-
-            if questao.get("explicacao"):
-                with st.expander("💡 Ver explicação"):
-                    st.write(questao["explicacao"])
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("✅ Acertos", st.session_state.acertos)
-            with col2:
-                st.metric("❌ Erros", st.session_state.erros)
-
-            if st.button("➡  Próxima Questão"):
-                st.session_state.idx += 1
-                st.session_state.respondida = False
-                st.session_state.escolha = None
-                st.rerun()
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MODO: ADICIONAR QUESTÃO
-# ═══════════════════════════════════════════════════════════════════════════
-elif modo == "➕ Adicionar Questão":
-    st.markdown("## ➕ Cadastrar Nova Questão")
-
-    materias_existentes = listar_materias(dados)
-
-    opcao_materia = st.radio(
-        "Matéria",
-        ["Selecionar existente", "Criar nova matéria"],
-        horizontal=True
-    )
-
-    if opcao_materia == "Criar nova matéria":
-        materia = st.text_input("Nome da nova matéria (ex: Redes, Python, Hardware)")
-    else:
-        if materias_existentes:
-            materia = st.selectbox("Selecione a matéria", materias_existentes)
-        else:
-            st.info("Nenhuma matéria cadastrada. Crie uma nova.")
-            materia = st.text_input("Nome da nova matéria")
-
-    st.markdown("---")
-    enunciado = st.text_area("📄 Enunciado da questão", height=100, placeholder="Digite o enunciado completo aqui...")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        alt_a = st.text_input("A)", placeholder="Alternativa A")
-        alt_b = st.text_input("B)", placeholder="Alternativa B")
-    with col2:
-        alt_c = st.text_input("C)", placeholder="Alternativa C")
-        alt_d = st.text_input("D)", placeholder="Alternativa D")
-
-    gabarito = st.selectbox("✅ Gabarito (resposta correta)", ["A", "B", "C", "D"])
-    explicacao = st.text_area("💡 Explicação (opcional)", height=80, placeholder="Explique por que essa é a resposta correta...")
-
-    if st.button("💾  Salvar Questão"):
-        if not materia or not enunciado or not alt_a or not alt_b or not alt_c or not alt_d:
-            st.error("Preencha todos os campos obrigatórios.")
-        else:
-            nova = {
-                "enunciado": enunciado,
-                "alternativa_a": alt_a,
-                "alternativa_b": alt_b,
-                "alternativa_c": alt_c,
-                "alternativa_d": alt_d,
-                "gabarito": gabarito,
-                "explicacao": explicacao,
-                "materia": materia,
-            }
-            if materia not in dados:
-                dados[materia] = []
-            dados[materia].append(nova)
-            salvar_questoes(dados)
-            st.session_state.dados = dados
-            st.success(f"✅ Questão salva em **{materia}**! Total nessa matéria: {len(dados[materia])}")
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MODO: VER BANCO
-# ═══════════════════════════════════════════════════════════════════════════
-elif modo == "📋 Ver Banco de Questões":
-    st.markdown("## 📋 Banco de Questões")
-
-    if not dados:
-        st.info("Nenhuma questão cadastrada ainda.")
-    else:
-        for materia, questoes in sorted(dados.items()):
-            with st.expander(f"📂 {materia}  —  {len(questoes)} questão(ões)"):
-                for i, q in enumerate(questoes, 1):
-                    st.markdown(f"**{i}.** {q['enunciado']}")
-                    st.markdown(f"- A) {q['alternativa_a']}")
-                    st.markdown(f"- B) {q['alternativa_b']}")
-                    st.markdown(f"- C) {q['alternativa_c']}")
-                    st.markdown(f"- D) {q['alternativa_d']}")
-                    st.markdown(f"✅ **Gabarito:** {q['gabarito']}")
-                    if q.get("explicacao"):
-                        st.markdown(f"💡 *{q['explicacao']}*")
-                    if i < len(questoes):
-                        st.markdown("---")
-
-                col1, col2 = st.columns([3, 1])
-                with col2:
-                    if st.button(f"🗑 Apagar matéria", key=f"del_{materia}"):
-                        del dados[materia]
-                        salvar_questoes(dados)
-                        st.session_state.dados = dados
-                        st.rerun()
+if dados:
+    st.write(f"Acertos: {dados['acertos']}")
+    st.write(f"Tempo: {int(dados['tempo'])} segundos")
+else:
+    st.info("Nenhum progresso salvo ainda.")
