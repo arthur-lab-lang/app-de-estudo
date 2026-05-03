@@ -3,7 +3,7 @@ import json
 import os
 import hashlib
 import pdfplumber
-import anthropic
+import google.generativeai as genai
 
 # ── Config ────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="StudyQuiz", page_icon="📚", layout="wide")
@@ -76,7 +76,8 @@ def extrair_texto_pdf(arquivo):
     return texto.strip()
 
 def gerar_questoes_ia(texto, quantidade, materia, api_key):
-    client = anthropic.Anthropic(api_key=api_key)
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-1.5-flash")
 
     prompt = f"""Você é um professor criando questões de múltipla escolha para um cursinho preparatório.
 
@@ -105,14 +106,8 @@ TEXTO DO PDF:
 {texto[:12000]}
 """
 
-    message = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    raw = message.content[0].text.strip()
-    # limpar possíveis marcações de código
+    response = model.generate_content(prompt)
+    raw = response.text.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -345,10 +340,10 @@ def pg_gerar_pdf():
 
     # API Key
     api_key = st.text_input(
-        "🔑 Chave da API Anthropic",
+        "🔑 Chave da API Google Gemini",
         type="password",
-        placeholder="sk-ant-...",
-        help="Obtenha em console.anthropic.com"
+        placeholder="AIza...",
+        help="Obtenha gratuitamente em aistudio.google.com"
     )
 
     st.divider()
