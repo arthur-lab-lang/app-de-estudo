@@ -24,6 +24,17 @@ def set_favicon(image_path):
 
 set_favicon("favicon-removebg-preview.png")
 
+def img_to_base64(img_file):
+    return base64.b64encode(img_file.read()).decode()
+
+def mostrar_imagem_questao(q):
+    if q.get("imagem"):
+        try:
+            img_bytes = base64.b64decode(q["imagem"])
+            st.image(img_bytes, use_container_width=True)
+        except:
+            pass
+            
 DB_FILE = "studyquiz_db.json"
 DIFICULDADES = ["Fácil", "Médio", "Difícil"]
 
