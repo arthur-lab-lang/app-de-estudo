@@ -706,4 +706,4 @@ def pg_revisao():
                     st.session_state.quiz_respondida=True; acertou=letra==q["gabarito"]
                     if acertou: st.session_state.quiz_acertos+=1
                     else: st.session_state.quiz_erros+=1
-                    st.session_state.ultima_resposta="correct" if acertou else "wrong
+                    st.session_state.ultima_resposta="correct" if acertou else "wrong"
