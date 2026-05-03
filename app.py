@@ -25,7 +25,6 @@ def set_favicon(image_path):
 set_favicon("favicon-removebg-preview.png")
 
 DB_FILE = "studyquiz_db.json"
-DB_FILE = "studyquiz_db.json"
 DIFICULDADES = ["Fácil", "Médio", "Difícil"]
 
 # ── DB ────────────────────────────────────────────────────────────────────
@@ -78,6 +77,7 @@ defaults = {
     "quiz_respostas": [],
     "qs_geradas": [],
     "editando_q": None,
+    "revisao_ativa": False,
     "prova_ativa": None,
     "prova_idx": 0, "prova_respondida": False,
     "prova_escolha": None, "prova_respostas": [],
@@ -271,7 +271,7 @@ def sidebar():
         st.markdown(f"**{u['nome']}** `{role_label}`")
         st.divider()
 
-        paginas = ["📖 Estudar", "📝 Provas", "⭐ Favoritos", "📊 Meu desempenho", "🔒 Minha conta"]
+        paginas = ["📖 Estudar", "📝 Provas", "🔁 Modo revisão", "⭐ Favoritos", "📊 Meu desempenho", "🏆 Ranking", "🔒 Minha conta"]
         if u["role"] == "prof":
             paginas += ["➕ Adicionar questão", "🤖 Gerar do PDF", "📋 Banco de questões",
                         "👥 Turmas", "📋 Criar prova", "📊 Relatório de turma"]
@@ -584,6 +584,7 @@ def _resolver_prova():
         cor_dif = {"Fácil": "🟢", "Médio": "🟡", "Difícil": "🔴"}.get(dif, "⚪")
         st.caption(f"📚 {q.get('materia','—')}  ·  {cor_dif} {dif}")
         st.markdown(f"**{q['enunciado']}**")
+        mostrar_imagem_questao(q)
         st.write("")
 
         letras = ["a", "b", "c", "d"]
@@ -863,7 +864,10 @@ def pg_estudar():
                 "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
                 "materia": st.session_state.quiz_mat,
                 "dificuldade": st.session_state.quiz_dif,
-                "total": tot, "acertos": ac, "pct": pct
+                "total": tot, "acertos": ac, "pct": pct,
+                "respostas": [{"enunciado": r["q"]["enunciado"],
+                               "acertou": r["escolha"] == r["q"]["gabarito"]}
+                              for r in st.session_state.quiz_respostas]
             })
             save_user_data(u["username"], udata)
         with st.expander("📋 Revisão"):
@@ -920,6 +924,7 @@ def pg_estudar():
                         save_user_data(u["username"], udata)
                         st.rerun()
             st.markdown(f"**{q['enunciado']}**")
+            mostrar_imagem_questao(q)
             letras = ["a", "b", "c", "d"]
             labels = [f"{l.upper()}) {q[f'alternativa_{l}']}" for l in letras]
             if not st.session_state.quiz_respondida:
@@ -954,6 +959,249 @@ def pg_estudar():
         if tempo_limit and not st.session_state.quiz_respondida:
             time.sleep(1)
             st.rerun()
+
+# ── MODO REVISÃO ──────────────────────────────────────────────────────────
+def pg_revisao():
+    st.header("🔁 Modo revisão")
+    u = st.session_state.usuario
+    udata = get_user_data(u["username"])
+    hist = udata.get("historico", [])
+
+    # coletar questões que errou nas sessões de estudo
+    todas = get_all_questions()
+    todas_por_enunc = {q["enunciado"]: q for q in todas}
+
+    erradas = []
+    for h in hist:
+        for r in h.get("respostas", []):
+            if not r.get("acertou", True):
+                enunc = r.get("enunciado", "")
+                if enunc in todas_por_enunc:
+                    erradas.append(todas_por_enunc[enunc])
+
+    # remover duplicatas mantendo ordem
+    vistas = set()
+    erradas_unicas = []
+    for q in erradas:
+        qid = q_id(q)
+        if qid not in vistas:
+            vistas.add(qid)
+            erradas_unicas.append(q)
+
+    if not erradas_unicas:
+        st.info("Nenhuma questão errada encontrada. Complete algumas sessões de estudo primeiro!")
+        st.caption("O modo revisão coleta as questões que você errou nas sessões de estudo e deixa você praticar só elas.")
+        return
+
+    st.caption(f"📋 {len(erradas_unicas)} questão(ões) que você já errou — pratique até dominar!")
+
+    if not st.session_state.quiz_ativo and not st.session_state.revisao_ativa and not st.session_state.quiz_finalizado:
+        col1, col2 = st.columns(2)
+        with col1:
+            qtd = st.number_input("Quantidade", min_value=1, max_value=len(erradas_unicas), value=min(10, len(erradas_unicas)))
+        with col2:
+            shuffle = st.checkbox("Embaralhar", value=True)
+
+        if st.button("🔁 Iniciar revisão", type="primary", use_container_width=True):
+            import random
+            pool = erradas_unicas.copy()
+            if shuffle: random.shuffle(pool)
+            pool = pool[:int(qtd)]
+            st.session_state.quiz_qs = pool
+            st.session_state.quiz_idx = 0
+            st.session_state.quiz_acertos = 0
+            st.session_state.quiz_erros = 0
+            st.session_state.quiz_respondida = False
+            st.session_state.quiz_escolha = None
+            st.session_state.quiz_ativo = True
+            st.session_state.revisao_ativa = True
+            st.session_state.quiz_finalizado = False
+            st.session_state.quiz_mat = "Revisão"
+            st.session_state.quiz_dif = "—"
+            st.session_state.quiz_tempo_limit = None
+            st.session_state.quiz_tempo_inicio = time.time()
+            st.session_state.quiz_respostas = []
+            st.rerun()
+
+    elif st.session_state.quiz_finalizado and st.session_state.revisao_ativa:
+        ac = st.session_state.quiz_acertos
+        er = st.session_state.quiz_erros
+        tot = ac + er
+        pct = round(ac / tot * 100) if tot else 0
+        col1, col2, col3 = st.columns(3)
+        col1.metric("✅ Acertos", ac)
+        col2.metric("❌ Erros", er)
+        col3.metric("📊 Aproveitamento", f"{pct}%")
+        if pct >= 70: st.success("🎉 Ótimo! Você dominou essas questões.")
+        elif pct >= 50: st.warning("📚 Melhorando! Continue praticando.")
+        else: st.error("💪 Ainda precisa praticar mais essas questões.")
+
+        udata2 = get_user_data(u["username"])
+        udata2["historico"].append({
+            "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "materia": "Revisão", "dificuldade": "—",
+            "total": tot, "acertos": ac, "pct": pct,
+            "respostas": [{"enunciado": r["q"]["enunciado"],
+                           "acertou": r["escolha"] == r["q"]["gabarito"]}
+                          for r in st.session_state.quiz_respostas]
+        })
+        save_user_data(u["username"], udata2)
+
+        with st.expander("📋 Revisão das respostas"):
+            for r in st.session_state.quiz_respostas:
+                q = r["q"]
+                ok = r["escolha"] == q["gabarito"]
+                st.markdown(f"{'✅' if ok else '❌'} **{q['enunciado']}**")
+                st.caption(f"Sua: **{r['escolha'].upper()}** | Gabarito: **{q['gabarito'].upper()}**")
+                if q.get("explicacao"): st.caption(f"💡 {q['explicacao']}")
+                st.divider()
+
+        if st.button("↺ Revisar novamente", type="primary"):
+            st.session_state.quiz_ativo = False
+            st.session_state.quiz_finalizado = False
+            st.session_state.revisao_ativa = False
+            st.rerun()
+
+    elif st.session_state.quiz_ativo and st.session_state.revisao_ativa:
+        qs = st.session_state.quiz_qs
+        idx = st.session_state.quiz_idx
+        if idx >= len(qs):
+            st.session_state.quiz_ativo = False
+            st.session_state.quiz_finalizado = True
+            st.rerun()
+            return
+
+        q = qs[idx]
+        st.progress(idx / len(qs), text=f"Questão {idx+1} de {len(qs)}  —  ✅ {st.session_state.quiz_acertos}  ❌ {st.session_state.quiz_erros}")
+
+        with st.container(border=True):
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                dif = q.get("dificuldade", "—")
+                cor_dif = {"Fácil": "🟢", "Médio": "🟡", "Difícil": "🔴"}.get(dif, "⚪")
+                st.caption(f"📚 {q['materia']}  ·  {cor_dif} {dif}  ·  {q['prof_nome']}")
+            with col2:
+                udata3 = get_user_data(u["username"])
+                qid = q_id(q)
+                ja_fav = qid in udata3["favoritos"]
+                if st.button("⭐" if ja_fav else "☆", key=f"rev_fav_{idx}"):
+                    if ja_fav: udata3["favoritos"].remove(qid)
+                    else: udata3["favoritos"].append(qid)
+                    save_user_data(u["username"], udata3)
+                    st.rerun()
+
+            st.markdown(f"**{q['enunciado']}**")
+            letras = ["a", "b", "c", "d"]
+            labels = [f"{l.upper()}) {q[f'alternativa_{l}']}" for l in letras]
+
+            if not st.session_state.quiz_respondida:
+                resp = st.radio("Escolha:", labels, index=None, key=f"rev_radio_{idx}")
+                if st.button("Confirmar →", type="primary", disabled=(resp is None)):
+                    letra = letras[labels.index(resp)]
+                    st.session_state.quiz_escolha = letra
+                    st.session_state.quiz_respondida = True
+                    if letra == q["gabarito"]: st.session_state.quiz_acertos += 1
+                    else: st.session_state.quiz_erros += 1
+                    st.session_state.quiz_respostas.append({"q": q, "escolha": letra})
+                    st.rerun()
+            else:
+                escolha = st.session_state.quiz_escolha
+                acertou = escolha == q["gabarito"]
+                for i, l in enumerate(letras):
+                    if l == q["gabarito"]: st.success(f"✅ {labels[i]}")
+                    elif l == escolha and not acertou: st.error(f"❌ {labels[i]}")
+                    else: st.write(labels[i])
+                if acertou: st.success("**Correto! Você aprendeu essa!**")
+                else: st.error(f"**Errado de novo!** Resposta: **{q['gabarito'].upper()}**")
+                if q.get("explicacao"):
+                    with st.expander("💡 Explicação"):
+                        st.write(q["explicacao"])
+                if st.button("Próxima →", type="primary"):
+                    st.session_state.quiz_idx += 1
+                    st.session_state.quiz_respondida = False
+                    st.session_state.quiz_escolha = None
+                    st.rerun()
+
+# ── RANKING ───────────────────────────────────────────────────────────────
+def pg_ranking():
+    st.header("🏆 Ranking")
+    u = st.session_state.usuario
+    db = load_db()
+
+    # opções de filtro
+    col1, col2 = st.columns(2)
+    with col1:
+        tipo = st.selectbox("Ranking por", ["📊 Aproveitamento médio", "📝 Total de questões respondidas", "🔥 Sequência de sessões"])
+    with col2:
+        turmas = get_minhas_turmas(u["username"], u["role"])
+        turma_opts = {"_geral": "🌐 Geral (todos)"}
+        turma_opts.update({tid: t["nome"] for tid, t in turmas.items()})
+        filtro_turma = st.selectbox("Turma", list(turma_opts.keys()), format_func=lambda x: turma_opts[x])
+
+    st.divider()
+
+    # montar lista de usuários pra rankear
+    alunos = [(uid, d) for uid, d in db["users"].items() if d["role"] in ["aluno", "prof"]]
+
+    if filtro_turma != "_geral":
+        turma_alunos = db["turmas"].get(filtro_turma, {}).get("alunos", [])
+        alunos = [(uid, d) for uid, d in alunos if uid in turma_alunos]
+
+    ranking = []
+    for uid, d in alunos:
+        udata = db.get("user_data", {}).get(uid, {})
+        hist = udata.get("historico", [])
+        if not hist: continue
+        total_qs = sum(h["total"] for h in hist)
+        media = round(sum(h["pct"] for h in hist) / len(hist))
+        sessoes = len(hist)
+        ranking.append({
+            "username": uid, "nome": d["nome"],
+            "media": media, "total_qs": total_qs, "sessoes": sessoes
+        })
+
+    if not ranking:
+        st.info("Nenhum dado de desempenho ainda. Os alunos precisam completar sessões de estudo.")
+        return
+
+    # ordenar conforme tipo
+    if tipo.startswith("📊"):
+        ranking.sort(key=lambda x: x["media"], reverse=True)
+        chave, label = "media", "%"
+    elif tipo.startswith("📝"):
+        ranking.sort(key=lambda x: x["total_qs"], reverse=True)
+        chave, label = "total_qs", " questões"
+    else:
+        ranking.sort(key=lambda x: x["sessoes"], reverse=True)
+        chave, label = "sessoes", " sessões"
+
+    medalhas = ["🥇", "🥈", "🥉"]
+    meu_pos = None
+
+    for i, r in enumerate(ranking):
+        pos = i + 1
+        medalha = medalhas[i] if i < 3 else f"#{pos}"
+        sou_eu = r["username"] == u["username"]
+        if sou_eu: meu_pos = pos
+
+        cor_bg = "border: 2px solid #4a9ff0;" if sou_eu else ""
+        destaque = " **(você)**" if sou_eu else ""
+
+        with st.container(border=True):
+            col1, col2, col3 = st.columns([1, 4, 2])
+            with col1:
+                st.markdown(f"### {medalha}")
+            with col2:
+                st.markdown(f"**{r['nome']}**{destaque}")
+                st.caption(f"@{r['username']}  ·  {r['sessoes']} sessões  ·  {r['total_qs']} questões respondidas")
+            with col3:
+                valor = r[chave]
+                cor = "🟢" if (chave == "media" and valor >= 70) else "🟡" if (chave == "media" and valor >= 50) else "🔵"
+                st.metric("", f"{cor} {valor}{label}")
+
+    if meu_pos:
+        st.divider()
+        st.caption(f"Sua posição: **#{meu_pos}** de {len(ranking)}")
 
 # ── FAVORITOS ─────────────────────────────────────────────────────────────
 def pg_favoritos():
@@ -1078,6 +1326,8 @@ def pg_adicionar():
         mat = st.selectbox("Matéria", minhas_mats) if (tipo_mat == "Selecionar existente" and minhas_mats) else st.text_input("Nova matéria")
         dificuldade = st.select_slider("Dificuldade", DIFICULDADES, value="Médio")
         enunc = st.text_area("Enunciado")
+        img_upload = st.file_uploader("🖼️ Imagem (opcional)", type=["png","jpg","jpeg","gif","webp"],
+                                       help="Útil para gráficos, mapas, fórmulas, etc.")
         col1, col2 = st.columns(2)
         with col1:
             alt_a = st.text_input("A)")
@@ -1094,12 +1344,15 @@ def pg_adicionar():
                 db2 = load_db()
                 if u["username"] not in db2["questions"]: db2["questions"][u["username"]] = {}
                 if mat not in db2["questions"][u["username"]]: db2["questions"][u["username"]][mat] = []
-                db2["questions"][u["username"]][mat].append({
+                q_novo = {
                     "enunciado": enunc, "alternativa_a": alt_a, "alternativa_b": alt_b,
                     "alternativa_c": alt_c, "alternativa_d": alt_d,
                     "gabarito": gabarito.lower(), "explicacao": explicacao,
-                    "materia": mat, "dificuldade": dificuldade
-                })
+                    "materia": mat, "dificuldade": dificuldade, "imagem": None
+                }
+                if img_upload:
+                    q_novo["imagem"] = img_to_base64(img_upload)
+                db2["questions"][u["username"]][mat].append(q_novo)
                 save_db(db2)
                 st.success(f"✅ Salvo em **{mat}** ({dificuldade})!")
                 st.rerun()
@@ -1204,6 +1457,7 @@ def pg_banco():
                 col1,col2,col3 = st.columns([5,1,1])
                 with col1:
                     st.markdown(f"**{i+1}.** {q['enunciado']}  {cor_dif} `{dif}`")
+                    mostrar_imagem_questao(q)
                     st.caption(f"A) {q['alternativa_a']}  ·  B) {q['alternativa_b']}  ·  C) {q['alternativa_c']}  ·  D) {q['alternativa_d']}")
                     st.caption(f"✅ **{q['gabarito'].upper()}**" + (f"  —  {q['explicacao']}" if q.get("explicacao") else ""))
                 with col2:
@@ -1241,6 +1495,13 @@ def pg_banco():
             gabarito = st.selectbox("Gabarito",["A","B","C","D"], index=gab_idx)
             dif = st.select_slider("Dificuldade", DIFICULDADES, value=q.get("dificuldade","Médio"))
             explicacao = st.text_area("Explicação", q.get("explicacao",""), height=80)
+            if q.get("imagem"):
+                st.caption("📷 Esta questão já tem imagem")
+                mostrar_imagem_questao(q)
+                remover_img = st.checkbox("Remover imagem atual")
+            else:
+                remover_img = False
+            nova_img = st.file_uploader("🖼️ Nova imagem (opcional)", type=["png","jpg","jpeg","gif","webp"])
             c1,c2 = st.columns(2)
             with c1:
                 salvar = st.form_submit_button("💾 Salvar", type="primary", use_container_width=True)
@@ -1248,10 +1509,16 @@ def pg_banco():
                 cancelar = st.form_submit_button("Cancelar", use_container_width=True)
         if salvar:
             db2 = load_db()
+            img_val = eq["q"].get("imagem")  # mantém imagem existente por padrão
+            if nova_img:
+                img_val = img_to_base64(nova_img)
+            elif remover_img:
+                img_val = None
             db2["questions"][eq["prof_u"]][eq["mat"]][eq["idx"]] = {
                 "enunciado":enunc,"alternativa_a":alt_a,"alternativa_b":alt_b,
                 "alternativa_c":alt_c,"alternativa_d":alt_d,"gabarito":gabarito.lower(),
-                "explicacao":explicacao,"materia":eq["mat"],"dificuldade":dif
+                "explicacao":explicacao,"materia":eq["mat"],"dificuldade":dif,
+                "imagem": img_val
             }
             save_db(db2)
             st.session_state.editando_q = None
@@ -1342,8 +1609,10 @@ def main():
     pg = sidebar()
     if pg == "📖 Estudar": pg_estudar()
     elif pg == "📝 Provas": pg_provas()
+    elif pg == "🔁 Modo revisão": pg_revisao()
     elif pg == "⭐ Favoritos": pg_favoritos()
     elif pg == "📊 Meu desempenho": pg_desempenho()
+    elif pg == "🏆 Ranking": pg_ranking()
     elif pg == "🔒 Minha conta": pg_minha_conta()
     elif pg == "➕ Adicionar questão": pg_adicionar()
     elif pg == "🤖 Gerar do PDF": pg_gerar_pdf()
