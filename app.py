@@ -10,6 +10,21 @@ import uuid
 
 # ── Config ────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="StudyQuiz", page_icon="favicon-removebg-preview.png", layout="wide")
+import base64
+
+def set_favicon(image_path):
+    with open(image_path, "rb") as f:
+        img = base64.b64encode(f.read()).decode()
+    ext = image_path.split(".")[-1]
+    st.markdown(f"""
+        <head>
+            <link rel="shortcut icon" href="data:image/{ext};base64,{img}">
+        </head>
+    """, unsafe_allow_html=True)
+
+set_favicon("favicon-removebg-preview.png")
+
+DB_FILE = "studyquiz_db.json"
 DB_FILE = "studyquiz_db.json"
 DIFICULDADES = ["Fácil", "Médio", "Difícil"]
 
