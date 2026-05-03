@@ -9,7 +9,7 @@ from datetime import datetime, date
 import uuid
 
 # ── Config ────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="StudyQuiz", page_icon="📚", layout="wide")
+st.set_page_config(page_title="StudyQuiz", page_icon="favicon.png", layout="wide")
 DB_FILE = "studyquiz_db.json"
 DIFICULDADES = ["Fácil", "Médio", "Difícil"]
 
