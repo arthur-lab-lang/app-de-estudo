@@ -179,7 +179,7 @@ TEXTO: {texto[:12000]}"""
     response=requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={"Authorization":f"Bearer {api_key}"},
-        json={"model":"deepseek/deepseek-r1:free","messages":[{"role":"user","content":prompt}]}
+        json={"model":"openrouter/auto","messages":[{"role":"user","content":prompt}]}
     )
     response.raise_for_status()
     raw=response.json()["choices"][0]["message"]["content"].strip()
